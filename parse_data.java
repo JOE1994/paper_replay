@@ -30,7 +30,6 @@ import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 
 public class parse_data {
-
 	Map<String, Integer> vocab_checker; // vocab MAP
 	BufferedWriter init_topic_writer, topic_writer;
 	java.sql.Connection con;
@@ -97,7 +96,6 @@ public class parse_data {
 	}
 
 	// count vocab and calculate document frequency.
-	// + print topic_list of ODP
 	DefaultHandler df_first = new DefaultHandler() {
 		Boolean gate = false;
 		String temp, topicid = "";
@@ -125,7 +123,6 @@ public class parse_data {
 				temp = new String(ch, start, length);
 				// split between 'space' or 'non-character'
 				// change to LOWERCASE.
-
 				temp_array = temp.toLowerCase().replaceAll("[\\W]", " ")
 						.split(" ");
 				for (String item : temp_array) {
@@ -152,12 +149,13 @@ public class parse_data {
 	};
 
 	// count words in each topic & get doc_vector
+	// + print topic_list of ODP
 	DefaultHandler df_second = new DefaultHandler() {
 
-		boolean getready = false, topic_gate = false;
-		String topicid = null, old_topicid = "", new_topicid = "";
+		boolean getready = false, topic_gate = false, signal = false;
+		String topicid = null, old_topicid = "NOTYET", new_topicid = "";
 		StringBuilder sum_content, cur_topic_jason;
-		int linkcount = 0, followcount;
+		int linkcount = 0, followcount = 0;
 		JSONObject obj;
 
 		public void startElement(String uri, String localName, String qName,
@@ -182,7 +180,47 @@ public class parse_data {
 						topicid = topicid.substring(0, m.start())
 								+ topicid.substring(m.end() - 1);
 					topicid = topicid.replaceFirst("/\\w$", "");
+
+					// important!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 					new_topicid = topicid;
+					if (old_topicid.equals("NOTYET") == false && signal) {
+						if (new_topicid.contains(old_topicid) == false) {
+							// next topic to insert is leaf topic!!!!!!!!
+							int len = old_topicid.length() - 1;
+							while (old_topicid.charAt(len) != '/' && len >= 1)
+								len--;
+							if (len == 0)
+								old_topicid = "";
+							else
+								old_topicid = old_topicid.substring(0, len);
+						}
+						cur_topic_jason.append(old_topicid);
+						cur_topic_jason.append('\t');
+
+						// calculate depth.
+						int depth;
+						if (old_topicid.equals(""))
+							depth = 0;
+						else {
+							depth = 1;
+							Matcher m2 = Pattern.compile("/").matcher(
+									old_topicid);
+							while (m2.find())
+								depth += 1;
+						}
+						cur_topic_jason.append(depth);
+						cur_topic_jason.append('\n'); // end of row data.
+
+						try {
+							// write topic-info(row-info) to .dat
+							topic_writer.write(cur_topic_jason.toString());
+							topic_writer.flush();
+						} catch (IOException e) {
+							e.printStackTrace();
+						}
+						signal = false;
+					}
+					old_topicid = new_topicid;
 
 					// new stringbuilder to concatenate topic text.
 					sum_content = new StringBuilder(800);
@@ -213,6 +251,8 @@ public class parse_data {
 				// count term frequency in this topic.
 				Map<String, Integer> cur_topic_vector;
 				if (linkcount == followcount) {
+					signal = true; // important!!! insert in startElement
+					// if all texts of one topic gathered.
 					String topic_sum[] = sum_content.toString().toLowerCase()
 							.replaceAll("[\\W]", " ").split(" ");
 					cur_topic_vector = new HashMap<String, Integer>();
@@ -229,20 +269,6 @@ public class parse_data {
 					// (including JSON string.)
 					cur_topic_jason = new StringBuilder(800);
 
-					cur_topic_jason.append(topicid);
-					cur_topic_jason.append('\t');
-					int depth;
-					if (topicid.equals(""))
-						depth = 0;
-					else {
-						depth = 1;
-						Matcher m = Pattern.compile("/").matcher(topicid);
-						while (m.find())
-							depth += 1;
-					}
-					cur_topic_jason.append(depth);
-					cur_topic_jason.append('\t');
-
 					obj = new JSONObject();
 					for (Map.Entry<String, Integer> entry : cur_topic_vector
 							.entrySet()) {
@@ -253,20 +279,53 @@ public class parse_data {
 										/ vocab_checker.get(entry.getKey()));
 					}
 					cur_topic_jason.append(obj.toJSONString());
-					cur_topic_jason.append('\n'); // end of JSON string
+					cur_topic_jason.append('\t');
 
-					// Write row info to .dat file.
 					try {
 						// write topic info to .txt
 						init_topic_writer.write(topicid);
 						init_topic_writer.flush();
 						init_topic_writer.newLine();
-
-						// write topic info to .dat
-						topic_writer.write(cur_topic_jason.toString());
-						topic_writer.flush();
+						// important!!!
 					} catch (IOException e) {
 						e.printStackTrace();
+					}
+
+					// important!!!!!!!!!!!!!!!!!!!!!
+					// insert last topic in each .rdf
+					if (topicid
+							.equals("Sports/Youth_and_High_School/News_and_Media")
+							|| topicid
+									.equals("Kids_and_Teens/Your_Family/Young_Caregivers")) {
+
+						int len = topicid.length() - 1;
+						while (topicid.charAt(len) != '/' && len >= 1)
+							len--;
+						topicid = topicid.substring(0, len); // trim leaf
+
+						cur_topic_jason.append(topicid);
+						cur_topic_jason.append('\t');
+
+						// calculate depth.
+						int depth;
+						if (topicid.equals(""))
+							depth = 0;
+						else {
+							depth = 1;
+							Matcher m2 = Pattern.compile("/").matcher(topicid);
+							while (m2.find())
+								depth += 1;
+						}
+						cur_topic_jason.append(depth);
+						cur_topic_jason.append('\n'); // end of row data.
+
+						try {
+							// write topic-info(row-info) to .dat
+							topic_writer.write(cur_topic_jason.toString());
+							topic_writer.flush();
+						} catch (IOException e) {
+							e.printStackTrace();
+						}
 					}
 				}
 			}
@@ -282,13 +341,15 @@ public class parse_data {
 							"jdbc:mysql://localhost:3306/lab_second?autoReconnect=true&useSSL=false",
 							"root", "2030kimm!");
 			st = con.createStatement();
-			String topics_load = "LOAD DATA INFILE 'C:/ProgramData/MySQL/MySQL Server 5.7/Uploads/topics.dat' INTO TABLE topics LINES TERMINATED BY '\n' (topic_id, depth, vector_json);";
+			String topics_load = "LOAD DATA INFILE 'C:/ProgramData/MySQL/MySQL Server 5.7/Uploads/topics.dat' "
+					+ "INTO TABLE topics LINES TERMINATED BY '\n' (vector_json, topic_id, depth);";
 			st.executeUpdate(topics_load);
 			System.out.println("Finished : topics_load applied to DB\n");
 
 			// add kids_and_teens
 			st.executeUpdate("INSERT INTO topics(topic_id, depth, vector_json) VALUES ('Kids_and_Teens', 1, '{}');");
 			System.out.println("INSERT 'kids_and_teens' finished.\n");
+
 		} catch (SQLException e) {
 			e.printStackTrace();
 		} finally {
